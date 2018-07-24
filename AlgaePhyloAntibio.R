@@ -21,6 +21,8 @@ library(geomorph)
 library(FactoMineR)
 library(factoextra)
 library(phylopath)
+library(Rphylip)
+library("arbutus", lib.loc="/Library/Frameworks/R.framework/Versions/3.3/Resources/library")
 
 ###Set working directory
 setwd("~/Dropbox/Microalgas-antibioticos/")
@@ -32,25 +34,33 @@ read.csv("base_de_datos/controls.csv") -> controls
 rownames(controls) = controls$Species
 controls = controls[,-1]
 names(controls) = c("cGrowth","cEQY", "cChlA", "cETR")
-
   #Extract the mean effect across concentrations
 keyvars = c("Species","dGrowth", "dEQY", "dChlA", "dETR")
 d_data = raw_data[,keyvars]
 d_byspp = split(d_data, d_data$Species)
 d_means = keyvars
+d_SEs = keyvars
+std.err <- function(a){sd(a)/sqrt(length(a))}
 d_byspp$`Nannochloropsis gaditana` <- d_byspp$`Nannochloropsis gaditana`[-12,]
 for(i in 1:length(d_byspp)){
   d_byspp[[i]] %>% .[,-1] %>% apply(.,2,FUN=mean) %>% c(names(d_byspp[i]),.) %>% rbind(d_means,.) -> d_means
+  d_byspp[[i]] %>% .[,-1] %>% apply(.,2,FUN=std.err) %>% c(names(d_byspp[i]),.) %>% rbind(d_SEs,.) -> d_SEs
 }
 d_means = d_means[-1,]
+d_SEs = d_SEs[-1,]
 colnames(d_means)[1] = "Species"
+colnames(d_SEs)[1] = "Species"
 rownames(d_means) = d_means[,1]
+rownames(d_SEs) = d_SEs[,1]
 d_means = as.data.frame(d_means[,-1])
+d_SEs = as.data.frame(d_SEs[,-1])
 for(i in 1:ncol(d_means)){
   d_means[,i] <- d_means[,i] %>% as.character() %>% as.numeric()
+  d_SEs[,i] <- d_SEs[,i] %>% as.character() %>% as.numeric()
 }
   #Extracting the differences between minimal and maximal Erythromycin concentrations
 d_change = keyvars
+d_changeSEs = keyvars
 for(i in 1:length(d_byspp)){
   DSP <- d_byspp[[i]]
   dSPchange = c(names(d_byspp)[i],1:4)
@@ -77,6 +87,7 @@ Nphylo$tip.label <- c("Isochrysis galbana", "Dunaliella salina", "Tetraselmis su
 Nphylo$edge.length[c(5,11)] = mean(Nphylo$edge.length)/1000
 Nultra = chronos(Nphylo)
 d_all_N = d_all[match(Nultra$tip.label, rownames(d_all)),]
+SE_N = d_SEs[match(Nultra$tip.label, rownames(d_SEs)),]
 
 PSBphylo <- read.tree("Fasta/psbA/psbA_tree_grupo externo")
 #plot(PSBphylo); nodelabels(); tiplabels()
@@ -86,6 +97,7 @@ PSBphylo$tip.label = c("Isochrysis galbana", "Dunaliella salina", "Tetraselmis s
 PSBphylo$edge.length[c(3,4,6)] = mean(PSBphylo$edge.length)/1000
 PSBultra = chronos(PSBphylo)
 d_all_PSB = d_all[match(PSBultra$tip.label, rownames(d_all)),]
+SE_PSB = d_SEs[match(PSBultra$tip.label, rownames(d_SEs)),]
 
 Ch16Sphylo <- read.tree("Fasta/16S_cloroplastos/16S_tree_grupo_externo")
 #plot(Ch16Sphylo); nodelabels(); tiplabels()
@@ -95,6 +107,7 @@ Ch16Sphylo$tip.label = c("Isochrysis galbana", "Dunaliella salina", "Tetraselmis
 Ch16Sphylo$edge.length[c(4,9)] = mean(Ch16Sphylo$edge.length)/1000
 Ch16Sultra = chronos(Ch16Sphylo)
 d_all_16S = d_all[match(Ch16Sultra$tip.label, rownames(d_all)),]
+SE_16S = d_SEs[match(Ch16Sultra$tip.label, rownames(d_SEs)),]
 
 Ch23Sphylo <- read.tree("Fasta/23s/23s_tree")
 #plot(Ch23Sphylo); nodelabels(); tiplabels()
@@ -104,11 +117,14 @@ Ch23Sphylo$tip.label = c("Isochrysis galbana", "Dunaliella salina", "Tetraselmis
 Ch23Sphylo$edge.length[c(12,4,5,6)] = mean(Ch23Sphylo$edge.length)/1000
 Ch23Sultra = chronos(Ch23Sphylo)
 d_all_23S = d_all[match(Ch23Sultra$tip.label, rownames(d_all)),]
+SE_23S = d_SEs[match(Ch23Sultra$tip.label, rownames(d_SEs)),]
 
 ### Pack-up data and trees into iterable lists
 treelist <- list(Nultra, PSBultra, Ch16Sultra, Ch23Sultra)
 data_list = list(d_all_N, d_all_PSB, d_all_16S, d_all_23S)
+SElist = list(SE_N, SE_PSB, SE_16S, SE_23S)
 names(data_list) = c("Nuclear", "PSBA", "16S", "23S")
+names(SElist) = c("Nuclear", "PSBA", "16S", "23S")
 
 ### Estimate RF distance between trees
 RFdiffs = matrix(nrow = 4, ncol = 4)
@@ -130,36 +146,103 @@ for(i in 1:4){
 AICc_list = list()
 for(tree in 1:4){
   i_tree <- treelist[[tree]]
+  startree <- rescale(i_tree, "lambda", 0)
   class(i_tree) = "phylo"
   i_dat <- data_list[[tree]]
+  i_SE <- data.frame(rep(0, nrow(i_dat)), rep(0, nrow(i_dat)),rep(0, nrow(i_dat)),rep(0, nrow(i_dat)), SElist[[tree]],SElist[[tree]], rep(0, nrow(i_dat)))
+  names(i_SE)=names(i_dat)
   print(names(data_list)[tree])
-  AIC_treei = matrix(nrow=ncol(i_dat), ncol = 6)
-  colnames(AIC_treei) = c("Variable", "Tree", "Best_model", "AICc", "K", "p_K")
+  AIC_treei = matrix(nrow=ncol(i_dat), ncol = 7)
+  colnames(AIC_treei) = c("Variable", "Tree", "Best_model", "2nd_Best_model", "1_2LoglikRatio_Pvalue", "K", "p_K")
   for(c in 1:ncol(i_dat)){
     C = i_dat[,c]
     names(C) = rownames(i_dat)
-    PSS_c <- physignal(C, i_tree)
-    PSS_c <- c(PSS_c$phy.signal, PSS_c$pvalue)
-    model_list <- c()
-    model_list[[1]] <- fitContinuous(i_tree, C, model="BM")$opt$aicc
-    model_list[[2]] <- fitContinuous(i_tree, C, model="white")$opt$aicc
-    model_list[[3]] <- fitContinuous(i_tree, C, model="drift")$opt$aicc
-    model_list[[4]] <- fitContinuous(i_tree, C, model="EB")$opt$aicc
-    model_list[[5]] <- fitContinuous(i_tree, C, model="OU")$opt$aicc
-    model_list[[6]] <- fitContinuous(i_tree, C, model="trend")$opt$aicc
-    model_list[[7]] <- fitContinuous(i_tree, C, model="delta")$opt$aicc
-    model_list[[8]] <- fitContinuous(i_tree, C, model="lambda")$opt$aicc
-    model_list[[9]] <- fitContinuous(i_tree, C, model="kappa")$opt$aicc
-    names(model_list) = c("BM", "WN", "Drift", "EB", "OU", "trend", "d", "l", "k")
-    best_model <- c(names(model_list)[which(model_list == min(model_list))], as.numeric(model_list[which(model_list == min(model_list))]))
-    string_c <- c(names(i_dat)[c], names(data_list)[tree], best_model, PSS_c)
+    Cse = i_SE[,c]
+    names(Cse) = rownames(i_SE)
+    PSS_c <- phylosig(i_tree, C, se=Cse, test=T)
+    PSS_c <- c(PSS_c$K, PSS_c$P)
+    model_matrix = matrix("NA", nrow = 10, ncol = 2)
+    colnames(model_matrix) = c("aicc","lnL")
+    row.names(model_matrix) = c("BM", "white", "drift", "EB", "OU", "trend", "delta", "lambda", "kappa", "starBM")
+    for(j in 1:dim(model_matrix)[1]){
+      if(j==nrow(model_matrix)){
+        temp_model <- fitContinuous(startree, C, model="BM", SE = Cse)$opt
+      }
+      else{
+        temp_model <- fitContinuous(i_tree, C, model=row.names(model_matrix)[j], SE = Cse)$opt
+      }
+      model_matrix[j, "aicc"] <- temp_model$aicc
+      model_matrix[j, "lnL"] <- temp_model$lnL
+    }
+    model_matrix %>% as.data.frame() -> model_df
+    model_df$aicc <- as.numeric(as.character(model_df$aicc))
+    model_df$lnL <- as.numeric(as.character(model_df$lnL))
+    model_df <- model_df[order(model_df$aicc),]
+    print(model_df)
+    Pchi <- (2*(model_df$lnL[1] - model_df$lnL[2])) %>% pchisq(df=1, lower.tail = F)
+    print(Pchi)
+    string_c <- c(names(i_dat)[c], names(data_list)[tree], rownames(model_df)[1], rownames(model_df)[2], Pchi, PSS_c[1:2])
     names(string_c) = colnames(AIC_treei)
     AIC_treei[c,] <- string_c
   }
   AICc_list[[tree]] <- as.data.frame(AIC_treei)
+  print(AIC_treei)
 }
 fullModelTesting <- rbind(AICc_list[[1]], AICc_list[[2]], AICc_list[[3]], AICc_list[[4]])
-#write.csv(fullModelTesting, "deliverables/model_support/BestModels.csv")
+#write.csv(fullModelTesting, "deliverables/model_support/BestModels_wSE_wLL.csv")
+
+### Arbutus model adequacy
+
+supportBM <- read.csv("deliverables/model_support/BestModels_wSE_wLL.csv", row.names = 1) %>% .[which(.$Best_model == "BM"),]
+names(treelist) = unique(supportBM$Tree)
+madlist=list()
+for(tree in 1:length(treelist)){
+  i_tree <- treelist[[tree]]
+  class(i_tree) = "phylo"
+  i_dat <- data_list[[tree]] %>% .[,which(names(.) %in% supportBM$Variable[supportBM$Tree == names(treelist)[tree]])]
+  MADtable = as.data.frame(matrix(ncol=8, nrow=nrow(supportBM[which(supportBM$Tree==names(treelist)[tree]),])))
+  names(MADtable) = c("Variable", "Tree", "msig", "cvar", "svar", "sasr", "shgt", "dcfd")
+  for(c in 1:ncol(i_dat)){
+    MADtable$Variable[c] <- names(i_dat)[c]
+    MADtable$Tree[c] <- names(treelist)[tree]
+    C <- i_dat[,c]
+    names(C)=rownames(i_dat)
+    fitC <- fitContinuous(i_tree, C, model="BM")
+    UTC <- make_unit_tree(fitC)
+    picstat_data <- calculate_pic_stat(UTC)
+    sim <- simulate_char_unit(UTC)
+    picstat_sim <- calculate_pic_stat(sim)
+    compare_pic_stat(picstat_data, picstat_sim) %>% .$p.values -> MADtable[,c(3:8)]
+  }
+  madlist[[tree]] <- MADtable
+}
+madBMtable <- rbind(madlist[[1]], madlist[[2]], madlist[[3]], madlist[[4]])
+
+  #dGrowth in 23S, EB
+dGr23S = d_all_23S$dGrowth
+names(dGr23S) = rownames(d_all_23S)
+
+fC_EB_dGr23S = fitContinuous(Ch23Sultra, dGr23S, model="EB")
+UTEB_dGr23S = make_unit_tree(fC_EB_dGr23S)
+picstatEB_dGr23S = calculate_pic_stat(UTEB_dGr23S)
+simcharEB_dGr23S = simulate_char_unit(UTEB_dGr23S)
+simpicstatEB_dGr23S = calculate_pic_stat(simcharEB_dGr23S)
+compare_pic_stat(picstatEB_dGr23S, simpicstatEB_dGr23S) %T>% plot() %>% .$p.values %>% as.data.frame() -> MAD_EB_dGr23S
+
+  #mEQY in 23S, EB
+mEQY23S = d_all_23S$mEQY
+names(mEQY23S) = rownames(d_all_23S)
+
+fC_EB_mEQY23S = fitContinuous(Ch23Sultra, mEQY23S, model="EB")
+UTEB_mEQY23S = make_unit_tree(fC_EB_mEQY23S)
+picstatEB_mEQY23S = calculate_pic_stat(UTEB_mEQY23S)
+simcharEB_mEQY23S = simulate_char_unit(UTEB_mEQY23S)
+simpicstatEB_mEQY23S = calculate_pic_stat(simcharEB_mEQY23S)
+comparison = compare_pic_stat(picstatEB_mEQY23S, simpicstatEB_mEQY23S)
+compare_pic_stat(picstatEB_mEQY23S, simpicstatEB_mEQY23S) %T>% plot() %>% .$p.values %>% as.data.frame() -> MAD_EB_mEQY23S
+MADs = data.frame(MAD_EB_dGr23S, MAD_EB_mEQY23S)
+names(MADs) = c("dGrowth", "mEQY")
+
 
 ###Contmaps
 for(tree in 1:4){
@@ -243,6 +326,25 @@ for(tree in 1:4){
   write.csv(logLs_list[[tree]], paste("deliverables/PGLS/PGLSlogLikelihoods_", names(data_list)[tree], ".csv", sep=""))
   write.csv(PGLStrunc_list[[tree]], paste("deliverables/PGLS/PGLSpvaluesTRUNC_", names(data_list)[tree], ".csv", sep=""))
 }
+
+DG23S = d_all_23S$dGrowth
+names(DG23S) = rownames(d_all_23S)
+MEQY23S = d_all_23S$mEQY
+names(MEQY23S) = rownames(d_all_23S)
+DG23S_SE = SE_23S$dGrowth
+names(DG23S_SE) = rownames(d_all_23S)
+MEQY23S_SE = SE_23S$dEQY
+names(MEQY23S_SE) = rownames(d_all_23S)
+pglsDATA = data.frame(DG23S, MEQY23S)
+rownames(pglsDATA) = rownames(d_all_23S)
+star23S = rescale(Ch23Sultra,"lambda",0)
+Me_Dg <- pgls.SEy(model = MEQY23S~DG23S, data = pglsDATA, se=MEQY23S_SE, tree = Ch23Sultra)
+Me_Dg_star <- pgls.SEy(model = MEQY23S~DG23S, data = pglsDATA, se=MEQY23S_SE, tree = star23S)
+pgls23tree = Ch23Sultra
+class(pgls23tree) <- "phylo"
+PIC_meqy_dgrowth = Rcontrast(pgls23tree, pglsDATA, path="~/Downloads/phylip-3.695/exe")
+PIC_meqy_dgrowth$Contrasts %>% cor.table()
+cor.table(pglsDATA)
 
 ###Phenograms with uncertainty
 Phenogram <- function(a,b,c){
@@ -348,6 +450,8 @@ modelpars = c("Variable", "Tree", "model", "sigsq", "z0", "alpha", "slope")
 for(tree in 1:4){
   i_tree <- treelist[[tree]]
   i_dat <- data_list[[tree]]
+  i_SE <- data.frame(rep(0, nrow(i_dat)), rep(0, nrow(i_dat)),rep(0, nrow(i_dat)),rep(0, nrow(i_dat)), SElist[[tree]],SElist[[tree]], rep(0, nrow(i_dat)))
+  names(i_SE)=names(i_dat)
   evol_vars <- which(AICc_list[[tree]]$Best_model != "WN")
   i_dat = i_dat[,evol_vars]
   for(c in 1:ncol(i_dat)){
@@ -355,7 +459,9 @@ for(tree in 1:4){
     if(model_c != "WN" & names(i_dat)[c] != "endosym"){
       C = i_dat[,c]
       names(C) = rownames(i_dat)
-      fit_c <- fitContinuous(i_tree, C, model=as.character(model_c))
+      Cse = i_SE[,c]
+      names(Cse) = rownames(i_SE)
+      fit_c <- fitContinuous(i_tree, C, model=as.character(model_c), SE = Cse)
       if(as.character(model_c)=="trend"){
         SLP = fit_c$opt$slope
       }
@@ -375,7 +481,8 @@ modelpars = as.data.frame(modelpars)
 modelpars[,1:3] <- sapply(modelpars[,1:3], as.character)
 modelpars[,4:7] <- sapply(modelpars[,4:7], as.character)
 modelpars[,4:7] <- sapply(modelpars[,4:7], as.numeric)
-write.csv(modelpars, "deliverables/model_support/model_parameters.csv")
+#modelpars = modelpars[,-6]     #to remove alpha if no OU
+write.csv(modelpars, "deliverables/model_support/model_parameters_wSE.csv")
 
 ##Phylogenetic Path Analysis
 for(tree in 1:4){
